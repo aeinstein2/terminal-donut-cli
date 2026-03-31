@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terminal Donut Webapp</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d12;
+      --panel: #141824;
+      --panel-2: #0f1320;
+      --text: #d7dcee;
+      --muted: #9aa4c4;
+      --accent: #7cc5ff;
+      --border: #2a3350;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: radial-gradient(1300px 900px at 15% -10%, #1b2847 0%, var(--bg) 45%);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+    }
+
+    .app {
+      width: min(1000px, 100%);
+      background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+      overflow: hidden;
+    }
+
+    .bar {
+      padding: .7rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: .5rem;
+      flex-wrap: wrap;
+    }
+
+    .title {
+      font-weight: 700;
+      letter-spacing: .2px;
+      color: #e6ecff;
+    }
+
+    .sub { color: var(--muted); font-size: .85rem; }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(120px, 1fr));
+      gap: .75rem;
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .field { display: grid; gap: .35rem; }
+    .field label { font-size: .78rem; color: var(--muted); }
+
+    input[type="number"] {
+      width: 100%;
+      background: #0e1322;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 9px;
+      padding: .5rem .6rem;
+      font: inherit;
+    }
+
+    .buttons {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #10172b;
+      color: var(--text);
+      border-radius: 9px;
+      padding: .5rem .9rem;
+      cursor: pointer;
+      font: inherit;
+      transition: transform .08s ease, border-color .2s ease, background .2s ease;
+    }
+    button:hover { border-color: #3f4f7c; background: #16213d; }
+    button:active { transform: translateY(1px); }
+    .primary { border-color: #3f6cb5; background: #19325f; color: #dbe9ff; }
+
+    .status { margin-left: auto; font-size: .85rem; color: var(--muted); }
+
+    .screen-wrap {
+      padding: 1rem;
+      overflow: auto;
+      max-height: 70vh;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre;
+      line-height: 1;
+      font-size: clamp(8px, 1.45vw, 13px);
+      color: #d6ecff;
+      text-shadow: 0 0 8px rgba(124,197,255,.25);
+      min-height: 10rem;
+      user-select: none;
+    }
+
+    @media (max-width: 700px) {
+      .controls { grid-template-columns: 1fr 1fr; }
+      .status { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="bar">
+      <div>
+        <div class="title">terminal-donut-cli / web simulator</div>
+        <div class="sub">ASCII torus renderer (donut.c style) in browser</div>
+      </div>
+      <div class="sub">JS + &lt;pre&gt;</div>
+    </div>
+
+    <section class="controls">
+      <div class="field">
+        <label for="fps">FPS</label>
+        <input id="fps" type="number" min="1" max="120" value="30" />
+      </div>
+      <div class="field">
+        <label for="width">Width</label>
+        <input id="width" type="number" min="20" max="200" value="80" />
+      </div>
+      <div class="field">
+        <label for="height">Height</label>
+        <input id="height" type="number" min="10" max="100" value="28" />
+      </div>
+
+      <div class="buttons">
+        <button id="pauseResume" class="primary">Pause</button>
+        <button id="reset">Reset Rotation</button>
+        <button id="apply">Apply Size/FPS</button>
+        <span id="status" class="status">running</span>
+      </div>
+    </section>
+
+    <div class="screen-wrap">
+      <pre id="screen" aria-label="ASCII donut output"></pre>
+    </div>
+  </main>
+
+  <script>
+    const shades = ".,-~:;=!*#$@";
+
+    const els = {
+      screen: document.getElementById("screen"),
+      fps: document.getElementById("fps"),
+      width: document.getElementById("width"),
+      height: document.getElementById("height"),
+      pauseResume: document.getElementById("pauseResume"),
+      reset: document.getElementById("reset"),
+      apply: document.getElementById("apply"),
+      status: document.getElementById("status"),
+    };
+
+    const state = {
+      a: 0,
+      b: 0,
+      running: true,
+      fps: 30,
+      width: 80,
+      height: 28,
+      last: 0,
+      acc: 0,
+      frameMs: 1000 / 30,
+    };
+
+    function clamp(n, min, max) {
+      return Math.max(min, Math.min(max, n));
+    }
+
+    function readConfig() {
+      state.fps = clamp(parseInt(els.fps.value || "30", 10), 1, 120);
+      state.width = clamp(parseInt(els.width.value || "80", 10), 20, 200);
+      state.height = clamp(parseInt(els.height.value || "28", 10), 10, 100);
+      state.frameMs = 1000 / state.fps;
+
+      els.fps.value = state.fps;
+      els.width.value = state.width;
+      els.height.value = state.height;
+    }
+
+    function renderFrame(a, b, width, height) {
+      const z = new Float32Array(width * height);
+      const out = new Array(width * height).fill(" ");
+
+      const r1 = 1;
+      const r2 = 2;
+      const k2 = 5;
+      const k1 = (width * k2 * 3) / (8 * (r1 + r2));
+
+      const cosA = Math.cos(a), sinA = Math.sin(a);
+      const cosB = Math.cos(b), sinB = Math.sin(b);
+
+      for (let theta = 0; theta < Math.PI * 2; theta += 0.07) {
+        const cost = Math.cos(theta), sint = Math.sin(theta);
+        for (let phi = 0; phi < Math.PI * 2; phi += 0.02) {
+          const cosp = Math.cos(phi), sinp = Math.sin(phi);
+
+          const circlex = r2 + r1 * cost;
+          const circley = r1 * sint;
+
+          const x = circlex * (cosB * cosp + sinA * sinB * sinp) - circley * cosA * sinB;
+          const y = circlex * (sinB * cosp - sinA * cosB * sinp) + circley * cosA * cosB;
+          const zCoord = k2 + cosA * circlex * sinp + circley * sinA;
+          const ooz = 1 / zCoord;
+
+          const xp = Math.floor(width / 2 + k1 * ooz * x);
+          const yp = Math.floor(height / 2 - (k1 * ooz * y) / 2);
+
+          const L =
+            cosp * cost * sinB -
+            cosA * cost * sinp -
+            sinA * sint +
+            cosB * (cosA * sint - cost * sinA * sinp);
+
+          if (xp >= 0 && xp < width && yp >= 0 && yp < height) {
+            const idx = xp + yp * width;
+            if (ooz > z[idx]) {
+              z[idx] = ooz;
+              const shadeIdx = clamp((L * 8) | 0, 0, shades.length - 1);
+              out[idx] = shades[shadeIdx];
+            }
+          }
+        }
+      }
+
+      let text = "";
+      for (let i = 0; i < out.length; i += width) {
+        text += out.slice(i, i + width).join("") + "\n";
+      }
+      return text;
+    }
+
+    function draw() {
+      els.screen.textContent = renderFrame(state.a, state.b, state.width, state.height);
+      state.a += 0.04;
+      state.b += 0.02;
+    }
+
+    function tick(ts) {
+      if (!state.last) state.last = ts;
+      const delta = ts - state.last;
+      state.last = ts;
+
+      if (state.running) {
+        state.acc += delta;
+        while (state.acc >= state.frameMs) {
+          draw();
+          state.acc -= state.frameMs;
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function setRunning(v) {
+      state.running = v;
+      els.pauseResume.textContent = v ? "Pause" : "Resume";
+      els.status.textContent = v
+        ? `running @ ${state.fps} fps (${state.width}x${state.height})`
+        : "paused";
+    }
+
+    els.pauseResume.addEventListener("click", () => setRunning(!state.running));
+
+    els.reset.addEventListener("click", () => {
+      state.a = 0;
+      state.b = 0;
+      draw();
+    });
+
+    els.apply.addEventListener("click", () => {
+      readConfig();
+      state.acc = 0;
+      draw();
+      if (state.running) {
+        els.status.textContent = `running @ ${state.fps} fps (${state.width}x${state.height})`;
+      }
+    });
+
+    [els.fps, els.width, els.height].forEach((el) => {
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") els.apply.click();
+      });
+    });
+
+    readConfig();
+    draw();
+    setRunning(true);
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
